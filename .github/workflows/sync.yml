@@ -2,7 +2,7 @@ name: Sincronizar Meta Valle
 
 on:
   schedule:
-    - cron: '0 * * * *'   # executa a cada 1 hora
+    - cron: '* * * * *'   # executa a cada 1 hora
   workflow_dispatch:       # permite executar manualmente
 
 jobs:
