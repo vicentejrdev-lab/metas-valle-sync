@@ -3,9 +3,10 @@ import psycopg2
 from io import StringIO
 import requests
 import os
+import time
 
 # =========================================================
-# CONFIGURAÇÕES (via GitHub Secrets / Variáveis de Ambiente)
+# CONFIGURAÇÕES (GitHub Secrets / Variáveis de Ambiente)
 # =========================================================
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
@@ -17,9 +18,12 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1oS7VTEOmhaq1hZnns9unXS8qBNJq8yves0dtdZtJUlk/export?format=csv"
 
 # =========================================================
-# 1) LER A PLANILHA
+# 1) LER A PLANILHA (COM QUEBRA DE CACHE)
 # =========================================================
-response = requests.get(SHEET_URL, timeout=30)
+response = requests.get(
+    f"{SHEET_URL}&_ts={int(time.time())}",  # cache-buster
+    timeout=30
+)
 response.raise_for_status()
 
 df = pd.read_csv(StringIO(response.text))
@@ -33,7 +37,7 @@ df.columns = (
       .str.upper()
 )
 
-# Validação mínima
+# Validação mínima das colunas obrigatórias
 required_cols = {"ID", "COOPERATIVA", "META", "DATA", "STATUS"}
 missing = required_cols - set(df.columns)
 if missing:
@@ -105,4 +109,4 @@ conn.commit()
 cursor.close()
 conn.close()
 
-print("✅ Sincronização concluída com sucesso")
+print("✅ Sincronização concluída com sucesso (cache ignorado)")
