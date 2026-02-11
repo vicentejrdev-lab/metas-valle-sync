@@ -3,6 +3,8 @@ import pandas as pd
 from io import StringIO
 import psycopg2
 from psycopg2.extras import execute_batch
+import os
+
 
 # =========================
 # LINK CSV GOOGLE SHEETS
