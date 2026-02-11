@@ -13,13 +13,14 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1oS7VTEOmhaq1hZnns9unXS8qBNJ
 # BANCO
 # =========================
 DB_CONFIG = {
-    "host": "SEU_HOST",
-    "database": "SEU_BANCO",
-    "user": "SEU_USUARIO",
-    "password": "SUA_SENHA",
-    "port": 5432
+    "host": os.environ.get("DB_HOST"),
+    "database": os.environ.get("DB_NAME"),
+    "user": os.environ.get("DB_USER"),
+    "password": os.environ.get("DB_PASS"),
+    "port": int(os.environ.get("DB_PORT", 5432)),
+    "sslmode": "require"
 }
-
+  
 print("Baixando planilha...")
 
 response = requests.get(SHEET_URL, timeout=60)
