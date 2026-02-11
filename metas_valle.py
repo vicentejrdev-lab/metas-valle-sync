@@ -5,11 +5,13 @@ import psycopg2
 from psycopg2.extras import execute_batch
 
 # =========================
-# CONFIGURAÇÕES
+# LINK CSV GOOGLE SHEETS
 # =========================
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1oS7VTEOmhaq1hZnns9unXS8qBNJq8yves0dtdZtJUlk/export?format=csv"
 
-SHEET_URL = "COLE_AQUI_O_LINK_CSV_DO_GOOGLE_SHEETS"
-
+# =========================
+# BANCO
+# =========================
 DB_CONFIG = {
     "host": "SEU_HOST",
     "database": "SEU_BANCO",
@@ -18,56 +20,38 @@ DB_CONFIG = {
     "port": 5432
 }
 
-# =========================
-# BAIXAR PLANILHA (UTF-8 CORRETO)
-# =========================
-
 print("Baixando planilha...")
 
 response = requests.get(SHEET_URL, timeout=60)
 response.raise_for_status()
 
-# IMPORTANTE: usar response.text (UTF8 automático)
+# UTF8 automático (ESSA É A PARTE QUE RESOLVE O Ã)
 df = pd.read_csv(StringIO(response.text))
 
-print("Planilha carregada com sucesso.")
+print("Planilha carregada")
 
 # =========================
-# LIMPEZA DE DADOS
+# TRATAMENTO
 # =========================
-
-# remove espaços extras
 df.columns = df.columns.str.strip()
 
-# garantir que cooperativa é texto
 df["cooperativa"] = df["cooperativa"].astype(str).str.strip()
-
-# converter meta
 df["meta"] = pd.to_numeric(df["meta"], errors="coerce")
-
-# converter data
 df["data"] = pd.to_datetime(df["data"], errors="coerce")
 
-# remover linhas inválidas
 df = df.dropna(subset=["cooperativa", "meta", "data"])
 
-print(f"{len(df)} registros válidos para importar.")
+print(f"{len(df)} registros válidos")
 
 # =========================
-# CONEXÃO POSTGRESQL
+# CONECTAR POSTGRES
 # =========================
-
-print("Conectando ao banco...")
-
 conn = psycopg2.connect(**DB_CONFIG)
 conn.autocommit = False
-cursor = conn.cursor()
+cur = conn.cursor()
 
-# =========================
-# CRIAR TABELA SE NÃO EXISTIR
-# =========================
-
-cursor.execute("""
+# cria tabela
+cur.execute("""
 CREATE TABLE IF NOT EXISTS meta_valle (
     id SERIAL PRIMARY KEY,
     cooperativa TEXT,
@@ -76,15 +60,24 @@ CREATE TABLE IF NOT EXISTS meta_valle (
     status TEXT DEFAULT 'ATIVO'
 );
 """)
-
 conn.commit()
 
-# =========================
-# INSERT / UPDATE
-# =========================
+# chave única
+cur.execute("""
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'uq_meta_valle_coop_data'
+    ) THEN
+        ALTER TABLE meta_valle
+        ADD CONSTRAINT uq_meta_valle_coop_data UNIQUE (cooperativa, data);
+    END IF;
+END$$;
+""")
+conn.commit()
 
-print("Inserindo dados...")
-
+# insert/update
 sql = """
 INSERT INTO meta_valle (cooperativa, meta, data, status)
 VALUES (%s, %s, %s, 'ATIVO')
@@ -94,59 +87,30 @@ DO UPDATE SET
     status = 'ATIVO';
 """
 
-# garantir chave única
-cursor.execute("""
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'uq_meta_valle_coop_data'
-    ) THEN
-        ALTER TABLE meta_valle
-        ADD CONSTRAINT uq_meta_valle_coop_data UNIQUE (cooperativa, data);
-    END IF;
-END$$;
-""")
-
-conn.commit()
-
-data_to_insert = [
-    (row["cooperativa"], row["meta"], row["data"].date())
-    for _, row in df.iterrows()
+rows = [
+    (r["cooperativa"], r["meta"], r["data"].date())
+    for _, r in df.iterrows()
 ]
 
-execute_batch(cursor, sql, data_to_insert, page_size=500)
-
+execute_batch(cur, sql, rows, page_size=500)
 conn.commit()
 
-print("Importação concluída com sucesso!")
+print("Dados inseridos")
 
 # =========================
-# CORRIGIR TEXTOS ANTIGOS (MOJIBAKE)
+# CORRIGIR ACENTOS ANTIGOS
 # =========================
-
-print("Corrigindo registros antigos com acento quebrado...")
-
-cursor.execute("""
+cur.execute("""
 UPDATE meta_valle
 SET cooperativa =
-    convert_from(
-        convert_to(cooperativa, 'LATIN1'),
-        'UTF8'
-    )
+    convert_from(convert_to(cooperativa, 'LATIN1'), 'UTF8')
 WHERE octet_length(cooperativa) > length(cooperativa);
 """)
-
 conn.commit()
 
-print("Acentos corrigidos.")
+print("Acentos corrigidos")
 
-# =========================
-# FINALIZAR
-# =========================
-
-cursor.close()
+cur.close()
 conn.close()
 
-print("Processo finalizado.")
+print("Finalizado com sucesso")
