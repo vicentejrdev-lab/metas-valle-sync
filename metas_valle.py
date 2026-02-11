@@ -20,7 +20,7 @@ DB_CONFIG = {
     "user": os.environ.get("DB_USER"),
     "password": os.environ.get("DB_PASS"),
     "port": int(os.environ.get("DB_PORT", 5432)),
-    "sslmode": "require"
+    "sslmode": "disable"
 }
   
 print("Baixando planilha...")
