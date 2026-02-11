@@ -1,122 +1,112 @@
-import requests
 import pandas as pd
-from io import StringIO
 import psycopg2
-from psycopg2.extras import execute_batch
+from io import StringIO
+import requests
 import os
 
+# =========================================================
+# CONFIGURAÇÕES (GitHub Secrets)
+# =========================================================
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASS")  # <<< NOME CORRETO DO SECRET
 
-# =========================
-# LINK CSV GOOGLE SHEETS
-# =========================
+# Link do Google Sheets CSV
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1oS7VTEOmhaq1hZnns9unXS8qBNJq8yves0dtdZtJUlk/export?format=csv"
 
-# =========================
-# BANCO
-# =========================
-DB_CONFIG = {
-- name: Run script
-  env:
-    DB_HOST: ${{ secrets.DB_HOST }}
-    DB_PORT: ${{ secrets.DB_PORT }}
-    DB_NAME: ${{ secrets.DB_NAME }}
-    DB_USER: ${{ secrets.DB_USER }}
-    DB_PASS: ${{ secrets.DB_PASS }}
-  run: python metas_valle.py
-
-}
-  
 print("Baixando planilha...")
-
-response = requests.get(SHEET_URL, timeout=60)
+response = requests.get(SHEET_URL, timeout=30)
 response.raise_for_status()
 
-# UTF8 automático (ESSA É A PARTE QUE RESOLVE O Ã)
 df = pd.read_csv(StringIO(response.text))
-
 print("Planilha carregada")
 
-# =========================
-# TRATAMENTO
-# =========================
-df.columns = df.columns.str.strip()
+# =========================================================
+# NORMALIZAR COLUNAS
+# =========================================================
+df.columns = (
+    df.columns
+    .str.strip()
+    .str.upper()
+)
 
-df["cooperativa"] = df["cooperativa"].astype(str).str.strip()
-df["meta"] = pd.to_numeric(df["meta"], errors="coerce")
-df["data"] = pd.to_datetime(df["data"], errors="coerce")
+required_cols = {"ID", "COOPERATIVA", "META", "DATA", "STATUS"}
+missing = required_cols - set(df.columns)
 
-df = df.dropna(subset=["cooperativa", "meta", "data"])
+if missing:
+    raise ValueError(f"Colunas obrigatórias ausentes na planilha: {missing}")
+
+df = df.dropna(subset=["ID", "COOPERATIVA"])
+
+# converter DATA para formato date do postgres
+df["DATA"] = pd.to_datetime(df["DATA"], errors="coerce").dt.date
 
 print(f"{len(df)} registros válidos")
 
-# =========================
-# CONECTAR POSTGRES
-# =========================
-conn = psycopg2.connect(**DB_CONFIG)
-conn.autocommit = False
-cur = conn.cursor()
+# =========================================================
+# CONEXÃO POSTGRESQL
+# =========================================================
+conn = psycopg2.connect(
+    host=DB_HOST,
+    port=DB_PORT,
+    dbname=DB_NAME,
+    user=DB_USER,
+    password=DB_PASSWORD,
+    connect_timeout=10,
+    sslmode="disable"
+)
 
-# cria tabela
-cur.execute("""
-CREATE TABLE IF NOT EXISTS meta_valle (
-    id SERIAL PRIMARY KEY,
-    cooperativa TEXT,
-    meta NUMERIC,
-    data DATE,
-    status TEXT DEFAULT 'ATIVO'
+cursor = conn.cursor()
+
+# =========================================================
+# GARANTIR TABELA
+# =========================================================
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS META_VALLE (
+    ID INT PRIMARY KEY,
+    COOPERATIVA VARCHAR(100) NOT NULL,
+    META INT NOT NULL DEFAULT 0,
+    DATA DATE,
+    STATUS VARCHAR(100)
 );
 """)
 conn.commit()
 
-# chave única
-cur.execute("""
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'uq_meta_valle_coop_data'
-    ) THEN
-        ALTER TABLE meta_valle
-        ADD CONSTRAINT uq_meta_valle_coop_data UNIQUE (cooperativa, data);
-    END IF;
-END$$;
-""")
-conn.commit()
-
-# insert/update
+# =========================================================
+# UPSERT
+# =========================================================
 sql = """
-INSERT INTO meta_valle (cooperativa, meta, data, status)
-VALUES (%s, %s, %s, 'ATIVO')
-ON CONFLICT (cooperativa, data)
+INSERT INTO META_VALLE (id, cooperativa, meta, data, status)
+VALUES (%s, %s, %s, %s, %s)
+ON CONFLICT (id)
 DO UPDATE SET
+    cooperativa = EXCLUDED.cooperativa,
     meta = EXCLUDED.meta,
-    status = 'ATIVO';
+    data = EXCLUDED.data,
+    status = EXCLUDED.status;
 """
 
-rows = [
-    (r["cooperativa"], r["meta"], r["data"].date())
-    for _, r in df.iterrows()
-]
+print("Enviando dados ao banco...")
 
-execute_batch(cur, sql, rows, page_size=500)
+for _, row in df.iterrows():
+    cursor.execute(
+        sql,
+        (
+            int(row["ID"]),
+            str(row["COOPERATIVA"]),
+            int(row["META"]) if not pd.isna(row["META"]) else 0,
+            row["DATA"],
+            row["STATUS"] if not pd.isna(row["STATUS"]) else None
+        )
+    )
+
+# =========================================================
+# FINALIZAR
+# =========================================================
 conn.commit()
-
-print("Dados inseridos")
-
-# =========================
-# CORRIGIR ACENTOS ANTIGOS
-# =========================
-cur.execute("""
-UPDATE meta_valle
-SET cooperativa =
-    convert_from(convert_to(cooperativa, 'LATIN1'), 'UTF8')
-WHERE octet_length(cooperativa) > length(cooperativa);
-""")
-conn.commit()
-
-print("Acentos corrigidos")
-
-cur.close()
+cursor.close()
 conn.close()
 
-print("Finalizado com sucesso")
+print("Sincronização concluída com sucesso")
