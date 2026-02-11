@@ -15,12 +15,15 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1oS7VTEOmhaq1hZnns9unXS8qBNJ
 # BANCO
 # =========================
 DB_CONFIG = {
-    "host": os.environ.get("DB_HOST"),
-    "database": os.environ.get("DB_NAME"),
-    "user": os.environ.get("DB_USER"),
-    "password": os.environ.get("DB_PASS"),
-    "port": int(os.environ.get("DB_PORT", 5432)),
-    "sslmode": "disable"
+- name: Run script
+  env:
+    DB_HOST: ${{ secrets.DB_HOST }}
+    DB_PORT: ${{ secrets.DB_PORT }}
+    DB_NAME: ${{ secrets.DB_NAME }}
+    DB_USER: ${{ secrets.DB_USER }}
+    DB_PASS: ${{ secrets.DB_PASS }}
+  run: python metas_valle.py
+
 }
   
 print("Baixando planilha...")
